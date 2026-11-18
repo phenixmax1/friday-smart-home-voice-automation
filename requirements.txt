@@ -1,0 +1,19 @@
+# Google Gemini API SDK (Interactions API for Gemini 3.8 Flash & Gemini 3.8 TTS)
+google-genai>=2.30.1
+pydantic>=2.10.0
+python-dotenv>=1.0.0
+
+# Shared Wi-Fi HTTP communication with NodeMCU (ESP8266)
+requests>=2.31.0
+
+# Speech Recognition & Microphone Input
+SpeechRecognition>=3.11.0
+PyAudio>=0.2.14
+
+# In-memory Cloud Audio Playback & Fast Neural Irish F.R.I.D.A.Y. TTS Fallback
+pygame>=2.6.0
+edge-tts>=7.0.0
+
+# Optional drop-in audio backend for Python 3.14+ on Windows (if PyAudio/pygame wheels unavailable)
+# sounddevice>=0.5.0
+# soundfile>=0.13.0
