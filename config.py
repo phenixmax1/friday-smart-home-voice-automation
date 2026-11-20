@@ -52,7 +52,11 @@ GEMINI_VOICE_STYLE: str = (
 EDGE_FRIDAY_VOICE: str = "en-IE-EmilyNeural"
 EDGE_VOICE_RATE: str = "+8%"
 
-# Default to True for instant sub-300ms speech with authentic MCU Irish female voice.
+# Authentic Hindi & Hinglish female neural voice (Swara)
+HINDI_FRIDAY_VOICE: str = "hi-IN-SwaraNeural"
+HINDI_VOICE_RATE: str = "+5%"
+
+# Default to True for instant sub-300ms speech with authentic neural voices.
 # Zero 404 errors, zero rate limits, and instant audio playback.
 PREFER_FAST_EDGE_VOICE: bool = True
 
@@ -70,9 +74,10 @@ DISCOVERY_TIMEOUT: float = 0.5     # Subnet scan per-host timeout
 DISCOVERY_MAX_WORKERS: int = 60    # Subnet discovery threads
 
 # ---------------------------------------------------------------------------
-# Speech Recognition (STT) Settings
+# Speech Recognition (STT) Settings (English, Hindi & Hinglish)
 # ---------------------------------------------------------------------------
-STT_LANGUAGE: str = "en-IN"
+STT_LANGUAGE: str = "en-IN"          # Primary: Indian English / Hinglish
+STT_FALLBACK_LANGUAGE: str = "hi-IN" # Secondary: Devanagari Hindi
 AMBIENT_NOISE_DURATION: float = 0.6  # Calibrated once at startup
 STT_PAUSE_THRESHOLD: float = 0.45    # Snappy end-of-speech detection (0.45s)
 STT_NON_SPEAKING_DURATION: float = 0.3 # 0.3s non-speaking window

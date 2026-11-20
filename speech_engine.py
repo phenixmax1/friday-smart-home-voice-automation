@@ -35,6 +35,7 @@ from google import genai
 import speech_recognition as sr
 
 import config
+import nlp_processor
 
 try:
     import edge_tts
@@ -279,8 +280,8 @@ def _sanitize_for_tts(text: str) -> str:
 def _speak_with_edge_tts(text: str) -> bool:
     """
     Synthesize F.R.I.D.A.Y.'s female neural voice entirely in memory using
-    `edge-tts`, with text sanitization, voice fallbacks (to prevent
-    `NoAudioReceived`), and local `%TEMP%` caching.
+    `edge-tts`, with multilingual voice selection (Hindi, Hinglish & English),
+    text sanitization, and local `%TEMP%` caching.
     """
     if edge_tts is None:
         print("[TTS Error]: edge-tts is not installed.")
@@ -290,12 +291,23 @@ def _speak_with_edge_tts(text: str) -> bool:
     if not spoken_text:
         return False
 
-    # Deduplicate voice order while keeping config.EDGE_FRIDAY_VOICE first
-    voices = list(dict.fromkeys([config.EDGE_FRIDAY_VOICE] + _EDGE_VOICE_FALLBACKS))
+    # Dynamic Multilingual Voice Selection
+    is_hi = nlp_processor.is_hindi_or_hinglish(spoken_text)
+    if is_hi:
+        primary_voice = getattr(config, "HINDI_FRIDAY_VOICE", "hi-IN-SwaraNeural")
+        primary_rate = getattr(config, "HINDI_VOICE_RATE", "+5%")
+        fallbacks = ["en-IN-NeerjaExpressiveNeural", "hi-IN-MadhurNeural", config.EDGE_FRIDAY_VOICE]
+    else:
+        primary_voice = config.EDGE_FRIDAY_VOICE
+        primary_rate = config.EDGE_VOICE_RATE
+        fallbacks = _EDGE_VOICE_FALLBACKS
+
+    # Deduplicate voice order while keeping primary voice first
+    voices = list(dict.fromkeys([primary_voice] + fallbacks))
 
     last_exc: Optional[Exception] = None
     for voice_name in voices:
-        for rate_value in (config.EDGE_VOICE_RATE, "+0%"):
+        for rate_value in (primary_rate, "+0%"):
             cache_key = f"edge|{voice_name}|{rate_value}|{spoken_text}"
             cached = _cache_file(cache_key, "mp3")
             if os.path.exists(cached) and os.path.getsize(cached) > 0:
@@ -325,7 +337,6 @@ def _speak_with_edge_tts(text: str) -> bool:
                     return _play_in_memory(io.BytesIO(mp3_bytes), namehint="mp3")
             except Exception as exc:
                 last_exc = exc
-                # If default rate failed with NoAudioReceived, try next voice cleanly
                 continue
 
     print(f"[TTS Error]: Edge Neural TTS failed ({last_exc!r}).")
@@ -334,10 +345,10 @@ def _speak_with_edge_tts(text: str) -> bool:
 
 def warmup_tts_cache() -> None:
     """
-    Pre-synthesizes standard F.R.I.D.A.Y. responses in a background thread so they
-    are immediately available in local temp cache with ~0ms generation latency.
+    Pre-synthesizes standard English and Hindi/Hinglish F.R.I.D.A.Y. responses in a
+    background thread so they are immediately available in local temp cache with ~0ms latency.
     """
-    common_phrases = [
+    english_phrases = [
         config.CLAP_WAKE_RESPONSE,
         config.STANDBY_GOODBYE_RESPONSE,
         "All lab lights are on.",
@@ -360,22 +371,42 @@ def warmup_tts_cache() -> None:
         "All lab subsystems are reporting nominal status.",
     ]
 
+    hindi_phrases = [
+        "Lab ki saari lights on kar di hain.",
+        "Lab ki saari lights band kar di hain.",
+        "Lab ke fans on kar diye hain.",
+        "Lab ke fans band kar diye hain.",
+        "Poora lab system power up kar diya hai.",
+        "Poora lab system power down kar diya hai.",
+        "Saare parde upar kiye ja rahe hain.",
+        "Saare parde niche kiye ja rahe hain.",
+        "Parde rok diye gaye hain.",
+        "Zone A on kar diya hai.",
+        "Zone B on kar diya hai.",
+        "Zone C on kar diya hai.",
+        "Lab ke sabhi subsystems normal kaam kar rahe hain.",
+        "Namaste! Main online hoon aur ready hoon, bataiye kya karna hai?",
+        "Theek hai, main in controls ko waise hi chhod rahi hoon.",
+    ]
+
     def _worker() -> None:
         if edge_tts is None:
             return
-        for phrase in common_phrases:
+
+        items = [(p, config.EDGE_FRIDAY_VOICE, config.EDGE_VOICE_RATE) for p in english_phrases]
+        hi_voice = getattr(config, "HINDI_FRIDAY_VOICE", "hi-IN-SwaraNeural")
+        hi_rate = getattr(config, "HINDI_VOICE_RATE", "+5%")
+        items.extend([(p, hi_voice, hi_rate) for p in hindi_phrases])
+
+        for phrase, voice_name, rate_val in items:
             spoken_text = _sanitize_for_tts(phrase)
-            cache_key = f"edge|{config.EDGE_FRIDAY_VOICE}|{config.EDGE_VOICE_RATE}|{spoken_text}"
+            cache_key = f"edge|{voice_name}|{rate_val}|{spoken_text}"
             cached = _cache_file(cache_key, "mp3")
             if os.path.exists(cached) and os.path.getsize(cached) > 0:
                 continue
 
-            async def _stream_one(text_val: str) -> bytes:
-                comm = edge_tts.Communicate(
-                    text=text_val,
-                    voice=config.EDGE_FRIDAY_VOICE,
-                    rate=config.EDGE_VOICE_RATE,
-                )
+            async def _stream_one(text_val: str, v: str, r: str) -> bytes:
+                comm = edge_tts.Communicate(text=text_val, voice=v, rate=r)
                 buf = bytearray()
                 async for chunk in comm.stream():
                     if chunk.get("type") == "audio":
@@ -384,7 +415,7 @@ def warmup_tts_cache() -> None:
 
             try:
                 fut = asyncio.run_coroutine_threadsafe(
-                    _stream_one(spoken_text), _get_async_loop()
+                    _stream_one(spoken_text, voice_name, rate_val), _get_async_loop()
                 )
                 mp3_data = fut.result(timeout=6.0)
                 if mp3_data:
@@ -540,7 +571,15 @@ def listen() -> str:
             print(f"[You]: {text}")
         return text
     except sr.UnknownValueError:
-        return ""
+        # Dual-language fallback: Try Hindi recognition if en-IN didn't resolve speech
+        try:
+            fallback_lang = getattr(config, "STT_FALLBACK_LANGUAGE", "hi-IN")
+            text = _RECOGNIZER.recognize_google(audio, language=fallback_lang).strip()
+            if text:
+                print(f"[You (Hindi)]: {text}")
+            return text
+        except (sr.UnknownValueError, sr.RequestError):
+            return ""
     except sr.RequestError as exc:
         print(f"[STT Error]: Google Speech Recognition unreachable ({exc!r}).")
         return ""

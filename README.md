@@ -1,6 +1,24 @@
 # F.R.I.D.A.Y. — Voice & Clap-Controlled Laboratory Automation (Master ESP8266)
 
-An advanced, real-life F.R.I.D.A.Y. voice automation system inspired by Marvel's MCU AI assistant (voiced by Kerry Condon), powered by **Google Gemini (`gemini-3.8-flash`)**, studio cloud female TTS (**Gemini Cloud TTS + Edge Neural Irish F.R.I.D.A.Y. voice**), and **hands-free double-clap wake detection** to control a Master ESP8266 laboratory automation controller running at `http://192.168.4.1`.
+An advanced, real-life F.R.I.D.A.Y. voice automation system inspired by Marvel's MCU AI assistant (voiced by Kerry Condon), powered by **Google Gemini (`gemini-3.8-flash`)**, studio cloud neural TTS (**Irish + Hindi Female Neural Voices**), and **hands-free double-clap wake detection** to control a Master ESP8266 laboratory automation controller running at `http://192.168.4.1`.
+
+---
+
+## 🌐 Multilingual Voice & NLP Support (English, Hindi & Hinglish)
+
+F.R.I.D.A.Y. understands and speaks in **English**, **Hinglish** (Romanized Hindi), and **Hindi** (Devanagari):
+
+* **Dual-Language Speech Recognition (STT)**: Recognizes Indian English, Romanized Hinglish, and pure Hindi Devanagari via dual-fallback recognition (`en-IN` + `hi-IN`).
+* **Multilingual Neural Voices**:
+  * **English Output**: `en-IE-EmilyNeural` (Authentic Irish female voice matching Kerry Condon).
+  * **Hindi & Hinglish Output**: `hi-IN-SwaraNeural` (Natural, fluent Indian female voice).
+* **Sample Voice Commands**:
+  * **Lights**: *"Light on kar do"*, *"Lights band karo"*, *"लाइट चालू करो"*, *"Turn on the lights"*
+  * **Fans**: *"Pankha chalu karo"*, *"Fans band kar do"*, *"पंखा चालू करो"*, *"Turn on the fans"*
+  * **Master Controls**: *"Sab kuch on kar do"*, *"Pura lab band karo"*, *"सब कुछ चालू करो"*, *"Power up the lab"*
+  * **Curtains**: *"Parde upar karo"*, *"Curtains niche karo"*, *"Parde roko"*, *"पर्दे ऊपर करो"*, *"Raise all curtains"*
+  * **Individual Relays**: *"Fan 2 chalu karo"*, *"Light 3 on karo"*, *"Zone A band karo"*
+  * **Status & Small Talk**: *"Status batao"*, *"Kya chal raha hai"*, *"Namaste Friday"*, *"Kaisi ho Friday"*
 
 ---
 
@@ -30,9 +48,7 @@ Controls all endpoints and zones defined in the master ESP web server (`index.ht
 
 - **Authentic MCU Assistant Character**: Calm under pressure, razor-sharp, technically precise, and subtly witty.
 - **Natural Delivery**: Does **NOT** repeat "Boss" in every sentence like a cartoon; speaks conversationally and directly, reserving "Boss" only for rare, contextual moments.
-- **Zero Robotic Voice (`pyttsx3` prohibited)**:
-  - **Gemini Cloud TTS**: `gemini-3.8-flash-lite-tts` / `gemini-3.8-flash-tts` with female voice `"Kore"` / `"Aoede"`.
-  - **Edge Neural Irish Female Voice**: `en-IE-EmilyNeural` at `+8%` rate — exact match for Marvel's F.R.I.D.A.Y.
+- **Zero Robotic Voice (`pyttsx3` prohibited)**: Studio cloud neural voices only (`hi-IN-SwaraNeural` and `en-IE-EmilyNeural`).
 - **In-Memory Playback & Local Temp Caching**: Zero disk thrashing, sub-300ms audio response.
 
 ---
@@ -41,15 +57,14 @@ Controls all endpoints and zones defined in the master ESP web server (`index.ht
 
 - **No Startup Menus**: Starts silently on STANDBY immediately upon launching.
 - **Double Clap**: Wakes F.R.I.D.A.Y. (*"All lab systems online. What do you need?"*) and enters hands-free voice mode automatically.
-- **Standby Triggers**: Saying *"bye"*, *"goodbye"*, *"sleep"*, or *"standby"* speaks *"Standing by. Call me when you need me."* and returns silently to standby.
+- **Standby Triggers**: Saying *"bye"*, *"goodbye"*, *"sleep"*, *"so jao"*, *"alvida"*, or *"standby"* speaks *"Standing by. Call me when you need me."* (or Hindi *"Theek hai, main standby par ja rahi hoon."*) and returns silently to standby.
 
 ---
 
 ## 🧠 Brain Architecture (`nlp_processor.py`)
 
-- **Primary Cloud Brain**: Gemini 3.8 Flash (`thinking_level="low"`) with Pydantic Structured Outputs (`FridayLabBrainOutput`).
-- **Fail-Fast Auto Failover**: `gemini-3.8-flash` → `gemini-3.5-flash-lite` → `gemini-3.1-flash-lite` → Local Backup.
-- **Instant Local Backup Brain**: Complete regex-based intent matcher for all master commands, zones, individual equipment, curtains, and MCU small talk, ensuring live demonstrations never fail or lag.
+- **Sub-Millisecond Fast Intent Matcher**: Direct hardware commands (lights, fans, zones, curtains, relays, and status checks in English, Hindi, and Hinglish) resolve in **< 0.5 ms** with zero cloud lag.
+- **Primary Cloud Brain**: Gemini 3.8 Flash (`thinking_level="low"`) for open-ended queries with automatic multi-model failover (`gemini-3.8-flash` → `gemini-3.5-flash-lite` → `gemini-3.1-flash-lite` → Local Backup).
 
 ---
 

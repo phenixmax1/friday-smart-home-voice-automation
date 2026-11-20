@@ -35,7 +35,9 @@ import speech_engine
 
 _STANDBY_PATTERN = re.compile(
     r"\b(?:bye|goodbye|good\s+bye|quit|exit|stop\s+listening|standby|stand\s+by|"
-    r"go\s+to\s+sleep|sleep\s+mode|that(?:'s|\s+is)\s+all)\b",
+    r"go\s+to\s+sleep|sleep\s+mode|that(?:'s|\s+is)\s+all|"
+    r"so\s*jao|sojao|alvida|chalo\s*bye|bas\s*karo|khatam|standby\s*par\s*jao)\b|"
+    r"[\u0900-\u097f]*(?:अलविदा|सो\s*जाओ)",
     flags=re.IGNORECASE,
 )
 
@@ -239,7 +241,12 @@ def run_active_voice_mode(
             continue
 
         if is_standby_phrase(utterance):
-            speech_engine.speak(config.STANDBY_GOODBYE_RESPONSE)
+            goodbye_reply = (
+                "Theek hai, main standby par ja rahi hoon. Jab zaroorat ho, bula lijiyega."
+                if nlp_processor.is_hindi_or_hinglish(utterance)
+                else config.STANDBY_GOODBYE_RESPONSE
+            )
+            speech_engine.speak(goodbye_reply)
             print("--- RETURNING TO STANDBY ---\n")
             time.sleep(config.CLAP_COOLDOWN_SEC)
             return current_status
