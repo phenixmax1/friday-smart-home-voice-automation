@@ -1,53 +1,73 @@
-# F.R.I.D.A.Y. — Voice & Clap-Controlled Smart Home Automation (NodeMCU ESP8266)
+# F.R.I.D.A.Y. — Voice & Clap-Controlled Laboratory Automation (Master ESP8266)
 
-A modular Python voice assistant powered by **Google Gemini (`gemini-3.8-flash`)**, cloud female TTS (**Gemini 3.8 TTS + Edge Neural Irish F.R.I.D.A.Y. fallback**), and **double-clap wake detection** to control a 4-channel **NodeMCU (ESP8266)** smart home controller over shared Wi-Fi.
+An advanced, real-life F.R.I.D.A.Y. voice automation system inspired by Marvel's MCU AI assistant (voiced by Kerry Condon), powered by **Google Gemini (`gemini-3.8-flash`)**, studio cloud female TTS (**Gemini Cloud TTS + Edge Neural Irish F.R.I.D.A.Y. voice**), and **hands-free double-clap wake detection** to control a Master ESP8266 laboratory automation controller running at `http://192.168.4.1`.
 
-## Features
+---
 
-- **Double-Clap Wake & Standby**: Starts silently on standby; double-clap wakes F.R.I.D.A.Y. (*"All systems online."*) and activates hands-free voice mode. Say *"bye"* or *"quit"* to return silently to standby.
-- **Fast Gemini AI Brain (`nlp_processor.py`)**: Uses the `google-genai` Interactions API with Pydantic Structured Outputs and automatic multi-model failover (`gemini-3.8-flash` → `gemini-3.5-flash-lite` → `gemini-3.1-flash-lite` → local backup) to handle:
-  - Direct & multi-device commands (*"Turn on the fan and switch off the light"*)
-  - Contextual intents (*"It's too dark in here"*, *"It's really hot"*, *"Goodnight"*)
-  - Negations (*"Don't turn on the fan"*)
-  - Natural conversation and small talk
-- **Cloud-Only Female Voice (`speech_engine.py`)**: Uses Google Gemini Cloud TTS (`gemini-3.8-flash-lite-tts`, voice `Kore`) with automatic fallback to Microsoft Edge Neural TTS (`en-IE-EmilyNeural`, Irish female F.R.I.D.A.Y. accent) — zero robotic on-device TTS.
-- **Shared Wi-Fi Auto-Discovery (`nodemcu_client.py`)**: Automatically connects via `smarthome.local`, configured fallback IP, concurrent `/24` subnet scanning (`ThreadPoolExecutor`), manual I2C LCD IP entry, or offline Simulation Mode.
-- **Dynamic Relay Mapping (`config.py`)**: Reassign physical appliances across `light`, `fan`, `relay3`, and `relay4` by editing `DEVICE_MAP`.
+## ⚡ Master ESP Hardware & Lab Architecture
 
-## NodeMCU HTTP API
+Controls all endpoints and zones defined in the master ESP web server (`index.html`):
 
-- `GET http://<IP>/status`
-  ```json
-  {"id":"nodemcu_smarthome", "ip":"192.168.x.x", "light":"ON", "fan":"OFF", "relay3":"OFF", "relay4":"OFF"}
-  ```
-- `GET http://<IP>/control?device=<device>&state=<state>&api=1`
-  - `device`: `light` | `fan` | `relay3` | `relay4` | `all`
-  - `state`: `on` | `off` | `toggle`
+1. **Master Controls**:
+   - `ALL LIGHTS ON / OFF`: `GET http://192.168.4.1/master?type=lights&s=1|0`
+   - `ALL FANS ON / OFF`: `GET http://192.168.4.1/master?type=fans&s=1|0`
+   - `ALL FANS + LIGHTS ON / OFF`: `GET http://192.168.4.1/master?type=all&s=1|0`
+2. **Zone Controls**:
+   - `ZONE A [Relays 1-12]`: `GET http://192.168.4.1/zone?z=1&s=1|0`
+   - `ZONE B [Fans 1-3, Lights 1-5]`: `GET http://192.168.4.1/zone?z=2&s=1|0`
+   - `ZONE C [Relays 1-8]`: `GET http://192.168.4.1/zone?z=3&s=1|0`
+3. **Individual Relays**:
+   - `GET http://192.168.4.1/relay?z={1|2|3}&r={1..12}` (toggles specific relay channel)
+4. **Motorized Curtains**:
+   - Individual: `GET http://192.168.4.1/curtain?c={1..4}&a={1|2|0}` (1=Up, 2=Down, 0=Stop)
+   - All Curtains: `GET http://192.168.4.1/allcurtains?a={1|2|0}`
+5. **Real-Time HTML Status Parsing**:
+   - Extracts live states of all 28 relays directly from the rendered HTML at `http://192.168.4.1/`.
 
-## Setup & Run
+---
+
+## 🎙️ Real-Life F.R.I.D.A.Y. Persona & Speech
+
+- **Authentic MCU Assistant Character**: Calm under pressure, razor-sharp, technically precise, and subtly witty.
+- **Natural Delivery**: Does **NOT** repeat "Boss" in every sentence like a cartoon; speaks conversationally and directly, reserving "Boss" only for rare, contextual moments.
+- **Zero Robotic Voice (`pyttsx3` prohibited)**:
+  - **Gemini Cloud TTS**: `gemini-3.8-flash-lite-tts` / `gemini-3.8-flash-tts` with female voice `"Kore"` / `"Aoede"`.
+  - **Edge Neural Irish Female Voice**: `en-IE-EmilyNeural` at `+8%` rate — exact match for Marvel's F.R.I.D.A.Y.
+- **In-Memory Playback & Local Temp Caching**: Zero disk thrashing, sub-300ms audio response.
+
+---
+
+## 👏 Iron Man Style Hands-Free Clap Wake
+
+- **No Startup Menus**: Starts silently on STANDBY immediately upon launching.
+- **Double Clap**: Wakes F.R.I.D.A.Y. (*"All lab systems online. What do you need?"*) and enters hands-free voice mode automatically.
+- **Standby Triggers**: Saying *"bye"*, *"goodbye"*, *"sleep"*, or *"standby"* speaks *"Standing by. Call me when you need me."* and returns silently to standby.
+
+---
+
+## 🧠 Brain Architecture (`nlp_processor.py`)
+
+- **Primary Cloud Brain**: Gemini 3.8 Flash (`thinking_level="low"`) with Pydantic Structured Outputs (`FridayLabBrainOutput`).
+- **Fail-Fast Auto Failover**: `gemini-3.8-flash` → `gemini-3.5-flash-lite` → `gemini-3.1-flash-lite` → Local Backup.
+- **Instant Local Backup Brain**: Complete regex-based intent matcher for all master commands, zones, individual equipment, curtains, and MCU small talk, ensuring live demonstrations never fail or lag.
+
+---
+
+## 🚀 Setup & Execution
 
 ```powershell
-# 1. Create and activate a virtual environment
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+# 1. Activate virtual environment
+.\.venv\Scripts\Activate.ps1
 
-# 2. Configure your Gemini API key
+# 2. Configure Gemini API key in .env
 Copy-Item .env.example .env
-# Edit .env and set GEMINI_API_KEY=<your_api_key>
+# Set GEMINI_API_KEY=<your_api_key> in .env
 
-# 3. Launch F.R.I.D.A.Y.
+# 3. Run the integration test suite
+.\.venv\Scripts\python.exe test_lab_integration.py
+
+# 4. Launch F.R.I.D.A.Y.
 .\.venv\Scripts\python.exe main.py
 ```
 
-## Project Structure
-
-| File | Purpose |
-| --- | --- |
-| `config.py` | API settings, voice profiles, clap sensitivity, and `DEVICE_MAP` |
-| `nodemcu_client.py` | Wi-Fi auto-discovery (`/24` scanner), persistent HTTP control, and simulation mode |
-| `nlp_processor.py` | Gemini 3.8 structured NLP brain with multi-model failover and local backup |
-| `speech_engine.py` | Cloud female TTS (Gemini TTS + Edge Neural fallback) and once-calibrated STT |
-| `clap_detector.py` | Real-time double-clap detector with ambient calibration and echo rejection |
-| `main.py` | Hands-free STANDBY ↔ ACTIVE voice controller loop |
-| `requirements.txt` | Python dependencies |
+*Note: If the physical Master ESP is powered off, simply press **Enter** at the startup prompt to launch in offline **Simulation Mode** with full virtual lab hardware.*

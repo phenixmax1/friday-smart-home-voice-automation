@@ -1,18 +1,23 @@
 """
 main.py
 -------
-F.R.I.D.A.Y. Smart Home Voice Assistant (NodeMCU ESP8266 + Gemini 3.8 Flash +
-Cloud Female TTS + Double-Clap Standby/Wake).
+F.R.I.D.A.Y. Master Lab Automation Voice Assistant:
+- Controls Master ESP8266 controller running at `http://192.168.4.1` (from `index.html`)
+  with full Master Controls, 3 Zones (28 relays total), and 4 Motorized Curtains.
+- Authentic MCU F.R.I.D.A.Y. persona (calm, crisp, intelligent Irish AI assistant;
+  speaks directly and never spams 'Boss').
+- Hands-Free Double-Clap Activation (Iron Man style, zero startup menus).
+- Cloud Studio Female Voices (Gemini TTS + Edge Neural Irish Voice, zero pyttsx3/robotic voice).
+- High speed with local failover.
 
-Lifecycle (Zero startup menus):
-  1. Connects to NodeMCU on shared Wi-Fi, shows live relay states, and calibrates
-     the microphone once.
-  2. Immediately enters silent STANDBY mode waiting for a double clap.
-  3. Double clap wakes F.R.I.D.A.Y. -> speaks "All systems online." and enters
-     hands-free Voice Command Mode automatically.
-  4. Saying "bye", "quit", "goodbye", "standby", or "stop listening" speaks
-     "Bye, it was great talking to you." and returns silently to STANDBY until
-     your next double clap. (Press Ctrl+C to exit the program.)
+Lifecycle:
+  1. Connects to Master ESP at `http://192.168.4.1` (or offline Simulation Mode).
+  2. Displays the laboratory status dashboard and calibrates microphone once.
+  3. Enters silent STANDBY waiting for a double clap.
+  4. Double clap activates F.R.I.D.A.Y. -> speaks "All lab systems online. What do you need?"
+     and enters hands-free continuous voice mode.
+  5. Saying "bye", "goodbye", "sleep", or "standby" speaks "Standing by. Call me when you need me."
+     and returns silently to STANDBY until your next double clap.
 """
 
 from __future__ import annotations
@@ -36,32 +41,102 @@ _STANDBY_PATTERN = re.compile(
 
 
 def is_standby_phrase(text: str) -> bool:
-    """Return True if the user asked to return F.R.I.D.A.Y. to standby."""
+    """Return True if the user asks to return F.R.I.D.A.Y. to standby."""
     return bool(_STANDBY_PATTERN.search(text.strip()))
 
 
-def display_status(base_url: str, status_data: Dict[str, Any]) -> None:
-    """Print the live status of all 4 NodeMCU relay channels."""
-    divider = "=" * 66
+def display_dashboard(base_url: str, status_data: Dict[str, Any]) -> None:
+    """Print the complete Lab Automation dashboard (from `index.html`)."""
+    divider = "=" * 70
+    subdivider = "-" * 70
     voice_label = (
         f"Edge Neural ({config.EDGE_FRIDAY_VOICE})"
         if config.PREFER_FAST_EDGE_VOICE
         else f"Gemini Cloud TTS ({config.TTS_MODEL}, voice={config.GEMINI_VOICE_NAME}) + Edge fallback"
     )
+
     print(f"\n{divider}")
-    print("   F.R.I.D.A.Y.  |  GEMINI SMART HOME CONTROLLER (NodeMCU ESP8266)")
+    print("      F.R.I.D.A.Y.  |  LABORATORY AUTOMATION SYSTEM (ESP8266)")
     print(divider)
-    print(f"  NodeMCU Link : {base_url}")
-    print(f"  LLM Brain    : {config.LLM_MODEL} (thinking_level={config.LLM_THINKING_LEVEL})")
-    print(f"  Voice Engine : {voice_label}")
-    print(f"  Wake Trigger : Double Clap ({config.CLAP_COUNT_REQUIRED}x)")
-    print("-" * 66)
-    for key in config.get_all_device_keys():
-        name = config.get_device_name(key)
-        state = str(status_data.get(key, "UNKNOWN")).upper()
-        print(f"    - {key:<7} ({name:<15}) : {state}")
-    print(f"{divider}")
+    print(f"  Master Controller : {base_url}")
+    print(f"  AI Brain Engine   : {config.LLM_MODEL} (thinking={config.LLM_THINKING_LEVEL})")
+    print(f"  Voice Profile     : {voice_label}")
+    print(f"  Wake Activation   : Double Clap ({config.CLAP_COUNT_REQUIRED}x)")
+    print(subdivider)
+
+    # Zone 1 (Zone A)
+    z1 = status_data.get("zone_1", {})
+    z1_summary = " ".join(f"R{r}:{z1.get(r, 'OFF')}" for r in range(1, 13))
+    print(f"  ZONE A [Relays 1-12] : {z1_summary}")
+
+    # Zone 2 (Zone B)
+    z2 = status_data.get("zone_2", {})
+    z2_fans = f"Fan1:{z2.get(1, 'OFF')}  Fan2:{z2.get(2, 'OFF')}  Fan3:{z2.get(3, 'OFF')}"
+    z2_lights = f"L1:{z2.get(4, 'OFF')} L2:{z2.get(5, 'OFF')} L3:{z2.get(6, 'OFF')} L4:{z2.get(7, 'OFF')} L5:{z2.get(8, 'OFF')}"
+    print(f"  ZONE B [Fans 1-3]    : {z2_fans}")
+    print(f"  ZONE B [Lights 1-5]  : {z2_lights}")
+
+    # Zone 3 (Zone C)
+    z3 = status_data.get("zone_3", {})
+    z3_summary = " ".join(f"R{r}:{z3.get(r, 'OFF')}" for r in range(1, 9))
+    print(f"  ZONE C [Relays 1-8]  : {z3_summary}")
+
+    # Curtains
+    curtains = status_data.get("curtains", {})
+    c_summary = " ".join(f"C{c}:{curtains.get(c, 'READY')}" for c in range(1, 5))
+    print(f"  CURTAINS [1-4]       : {c_summary}")
+
+    print(divider)
     print("  System is on STANDBY. Clap twice to activate. Press Ctrl+C to exit.\n")
+
+
+def execute_lab_actions(
+    base_url: str,
+    commands: list[nlp_processor.LabAction],
+) -> list[str]:
+    """Execute parsed lab directives on the Master ESP8266 controller."""
+    feedback = []
+
+    for cmd in commands:
+        print(f"[Action]: type={cmd.target_type}, target={cmd.target}, action={cmd.action}")
+
+        if cmd.target_type == "master":
+            state_val = 1 if cmd.action in {"on", "up"} else 0
+            ok, msg = nodemcu_client.send_master(base_url, cmd.target, state_val)
+            print(f"[Master ESP]: {msg}")
+            if not ok:
+                feedback.append(msg)
+
+        elif cmd.target_type == "zone":
+            zone_num = cmd.zone if cmd.zone in {1, 2, 3} else 1
+            state_val = 1 if cmd.action in {"on", "up"} else 0
+            ok, msg = nodemcu_client.send_zone(base_url, zone_num, state_val)
+            print(f"[Master ESP]: {msg}")
+            if not ok:
+                feedback.append(msg)
+
+        elif cmd.target_type == "relay":
+            zone_num = cmd.zone if cmd.zone in {1, 2, 3} else 1
+            relay_num = cmd.relay if cmd.relay else 1
+            ok, msg = nodemcu_client.send_relay(base_url, zone_num, relay_num)
+            print(f"[Master ESP]: {msg}")
+            if not ok:
+                feedback.append(msg)
+
+        elif cmd.target_type == "curtain":
+            curtain_num = cmd.curtain if cmd.curtain is not None else 0
+            if cmd.action in {"up", "open"}:
+                act_code = 1
+            elif cmd.action in {"down", "close"}:
+                act_code = 2
+            else:
+                act_code = 0  # stop
+            ok, msg = nodemcu_client.send_curtain(base_url, curtain_num, act_code)
+            print(f"[Master ESP]: {msg}")
+            if not ok:
+                feedback.append(msg)
+
+    return feedback
 
 
 def process_user_input(
@@ -69,41 +144,24 @@ def process_user_input(
     base_url: str,
     current_status: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """
-    Send user input to F.R.I.D.A.Y.'s Gemini brain, execute any returned relay
-    commands on the NodeMCU, refresh `current_status`, and speak her reply.
-    """
+    """Process user utterance through F.R.I.D.A.Y.'s brain, execute actions, and reply."""
     cleaned = user_text.strip()
     if not cleaned:
         return current_status
 
     brain_output = nlp_processor.understand_command(cleaned, current_status)
     hardware_errors = []
-    status_requested = False
 
-    for cmd in brain_output.commands:
-        print(f"[Action]: device='{cmd.device}', action='{cmd.action}'")
-        if cmd.action == "status":
-            status_requested = True
-            ok, refreshed = nodemcu_client.get_status(base_url)
-            if ok:
-                current_status = refreshed
-            else:
-                hardware_errors.append(refreshed.get("error", "Could not read status."))
-        else:
-            ok, msg = nodemcu_client.send_command(base_url, cmd.device, cmd.action)
-            print(f"[NodeMCU]: {msg}")
-            if not ok:
-                hardware_errors.append(msg)
-
-    if brain_output.commands and not status_requested:
+    if brain_output.commands:
+        hardware_errors = execute_lab_actions(base_url, brain_output.commands)
+        # Refresh status from ESP
         ok, refreshed = nodemcu_client.get_status(base_url)
         if ok:
             current_status = refreshed
 
     if hardware_errors:
         speech_engine.speak(
-            f"Couldn't reach the NodeMCU controller. {hardware_errors[0]}"
+            f"Encountered an issue communicating with the master controller. {hardware_errors[0]}"
         )
     else:
         speech_engine.speak(brain_output.reply)
@@ -116,10 +174,10 @@ def run_active_voice_mode(
     current_status: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
-    Hands-free continuous voice loop activated automatically after clapping.
-    Returns silently to STANDBY when the user says 'bye', 'quit', or 'standby'.
+    Hands-free continuous voice loop activated automatically by clapping.
+    Returns silently to STANDBY when the user says 'bye', 'goodbye', or 'sleep'.
     """
-    print("\n--- ACTIVE VOICE MODE (say 'bye' or 'quit' to return to standby) ---")
+    print("\n--- ACTIVE VOICE MODE (Say 'bye', 'sleep', or 'standby' to return) ---")
 
     while True:
         utterance = speech_engine.listen()
@@ -136,20 +194,20 @@ def run_active_voice_mode(
 
 
 def main() -> None:
-    """Direct STANDBY <-> ACTIVE clap-wake loop (no startup menu)."""
-    print("\nInitializing F.R.I.D.A.Y. Smart Home System...")
+    """Entrypoint: Direct STANDBY <-> ACTIVE clap-wake loop."""
+    print("\nInitializing F.R.I.D.A.Y. Lab Automation System...")
 
-    # 1. Connect to NodeMCU on shared Wi-Fi (or Simulation Mode)
+    # 1. Connect to Master ESP at http://192.168.4.1 (or Simulation Mode)
     base_url = nodemcu_client.connect_to_nodemcu()
 
-    # 2. Fetch and display initial status of all 4 relays
+    # 2. Fetch initial lab status and display the dashboard
     _, current_status = nodemcu_client.get_status(base_url)
-    display_status(base_url, current_status)
+    display_dashboard(base_url, current_status)
 
     # 3. Calibrate microphone ONCE at startup
     speech_engine.init_microphone()
 
-    # 4. Stay silently on STANDBY until a double clap activates Voice Mode
+    # 4. Silent STANDBY waiting for double clap
     try:
         while True:
             woke = clap_detector.wait_for_clap()

@@ -1,17 +1,31 @@
 """
 nodemcu_client.py
 -----------------
-Persistent HTTP client and concurrent /24 subnet auto-discovery for the
-NodeMCU (ESP8266) smart home controller on the same local Wi-Fi network.
+Persistent HTTP client and controller for the Master ESP (ESP8266) smart lab
+automation system located at `http://192.168.4.1`.
 
-Also supports an offline Simulation Mode (press Enter at the manual IP prompt)
-so you can test F.R.I.D.A.Y.'s voice and NLP brain even without the ESP8266
-powered on.
+Implements all endpoints from `index.html`:
+  1. Master Controls:
+       GET /master?type={lights|fans|all}&s={1|0}
+  2. Zone Controls:
+       GET /zone?z={1|2|3}&s={1|0}
+  3. Relay Controls:
+       GET /relay?z={1|2|3}&r={1..12}
+  4. Curtain Controls:
+       GET /curtain?c={1..4}&a={1|2|0}   (1=Up, 2=Down, 0=Stop)
+       GET /allcurtains?a={1|2|0}        (1=Up, 2=Down, 0=Stop)
+  5. Live Status Extraction:
+       Parses the rendered HTML from `http://<IP>/` to extract the real-time
+       state of all 28 relays across Zones A, B, and C.
+
+Includes offline Simulation Mode (press Enter if the physical ESP is off)
+so all voice and NLP capabilities can be tested anywhere.
 """
 
 from __future__ import annotations
 
 import ipaddress
+import re
 import socket
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -23,20 +37,25 @@ import requests
 import config
 
 SIMULATION_BASE_URL = "SIMULATION"
-VALID_STATES = frozenset({"on", "off", "toggle"})
 
-# Persistent HTTP session for connection pooling and lower latency
+# Persistent HTTP session with connection pooling
 _HTTP_SESSION = requests.Session()
 
-# In-memory virtual relay state used only when running in Simulation Mode
-_SIM_STATE: Dict[str, str] = {
-    "id": config.EXPECTED_DEVICE_ID,
-    "ip": "SIMULATION",
-    "light": "OFF",
-    "fan": "OFF",
-    "relay3": "OFF",
-    "relay4": "OFF",
+# In-memory virtual lab state used during Simulation Mode
+_SIM_STATE: Dict[str, Any] = {
+    "zone_1": {r: "ON" for r in range(1, 13)},
+    "zone_2": {
+        1: "OFF", 2: "OFF", 3: "OFF",  # Fans 1-3
+        4: "ON", 5: "ON", 6: "ON", 7: "ON", 8: "ON",  # Lights 1-5
+    },
+    "zone_3": {r: "ON" for r in range(1, 9)},
+    "curtains": {1: "STOPPED", 2: "STOPPED", 3: "STOPPED", 4: "STOPPED"},
 }
+
+_RELAY_HTML_PATTERN = re.compile(
+    r"onclick='relay\((\d+),(\d+)\)'>([^<]+)<br><small>([^<]+)</small>",
+    re.IGNORECASE,
+)
 
 
 def _normalize_url(host_or_url: str) -> str:
@@ -53,30 +72,36 @@ def _normalize_url(host_or_url: str) -> str:
 
 def _probe_host(host: str, timeout: float) -> Optional[str]:
     """
-    Probe `GET http://<host>/status` and verify `"id": "nodemcu_smarthome"`.
-    Returns the canonical base URL (preferring the NodeMCU's reported IP) or None.
+    Check if a host is the Lab Master ESP by checking if `http://<host>/`
+    returns the Lab Automation page or status endpoint.
     """
     base_url = _normalize_url(host)
     if not base_url or base_url == SIMULATION_BASE_URL:
         return None
 
     try:
-        # Use standalone requests.get inside parallel scan threads (Session is not thread-safe)
-        resp = requests.get(f"{base_url}/status", timeout=timeout)
-        if resp.status_code != 200:
-            return None
-        data = resp.json()
-        if isinstance(data, dict) and data.get("id") == config.EXPECTED_DEVICE_ID:
-            reported_ip = str(data.get("ip", "")).strip()
-            return _normalize_url(reported_ip) if reported_ip else base_url
+        resp = requests.get(base_url, timeout=timeout)
+        if resp.status_code == 200:
+            text = resp.text
+            if "Lab Automation" in text or "LAB AUTOMATION" in text or "relay(" in text:
+                return base_url
     except (requests.RequestException, ValueError):
-        return None
+        pass
+
+    # Secondary check on /status if implemented
+    try:
+        resp = requests.get(f"{base_url}/status", timeout=timeout)
+        if resp.status_code == 200:
+            return base_url
+    except (requests.RequestException, ValueError):
+        pass
+
     return None
 
 
 def _get_local_wifi_ip() -> Optional[str]:
-    """Detect the laptop's active Wi-Fi IPv4 address via the OS routing table."""
-    for target in (("8.8.8.8", 80), ("192.168.1.1", 80), ("10.0.0.1", 80)):
+    """Detect the laptop's active IPv4 address."""
+    for target in (("192.168.4.1", 80), ("8.8.8.8", 80), ("192.168.1.1", 80)):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
             sock.connect(target)
@@ -98,10 +123,7 @@ def _get_local_wifi_ip() -> Optional[str]:
 
 
 def _scan_subnet(local_ip: str) -> Optional[str]:
-    """
-    Concurrently scan all 254 host IPs on the local /24 subnet using
-    `ThreadPoolExecutor(max_workers=60)` with a 0.5s per-host timeout.
-    """
+    """Scan local /24 subnet for the Master ESP."""
     try:
         network = ipaddress.IPv4Network(f"{local_ip}/24", strict=False)
     except ValueError:
@@ -119,7 +141,7 @@ def _scan_subnet(local_ip: str) -> Optional[str]:
             return match
         return None
 
-    print(f"[Network]: Scanning {network} ({len(candidates)} hosts) with {config.DISCOVERY_MAX_WORKERS} threads...")
+    print(f"[Network]: Scanning {network} ({len(candidates)} hosts) for Lab Master ESP...")
     with ThreadPoolExecutor(max_workers=config.DISCOVERY_MAX_WORKERS) as executor:
         futures = [executor.submit(_worker, ip) for ip in candidates]
         for future in as_completed(futures):
@@ -134,7 +156,7 @@ def _scan_subnet(local_ip: str) -> Optional[str]:
 
 
 def extract_host(base_url: str) -> str:
-    """Return the clean IP/hostname from a base URL (or 'SIMULATION')."""
+    """Return clean host string."""
     if base_url == SIMULATION_BASE_URL:
         return SIMULATION_BASE_URL
     parsed = urlparse(_normalize_url(base_url))
@@ -143,153 +165,243 @@ def extract_host(base_url: str) -> str:
 
 def connect_to_nodemcu() -> str:
     """
-    Connect to the NodeMCU on the shared Wi-Fi network:
-      1. Check `http://{NODEMCU_HOST}/status` and `http://{NODEMCU_FALLBACK_IP}/status`.
-      2. Scan the laptop's /24 Wi-Fi subnet concurrently (60 workers, 0.5s timeout).
-      3. Prompt for the IP shown on the NodeMCU's 16x2 I2C LCD, or press Enter
-         to launch in offline Simulation Mode.
+    Connect to the Master ESP Lab Controller:
+      1. Probe `http://192.168.4.1` (Master ESP default IP).
+      2. Probe fallback IP / hostname from config.
+      3. Scan local Wi-Fi subnet.
+      4. Prompt user or press Enter for Simulation Mode.
     """
-    # Step 1: Fast check of mDNS hostname and fallback IP
-    for target in (config.NODEMCU_HOST, config.NODEMCU_FALLBACK_IP):
-        if not target:
+    primary_targets = [config.NODEMCU_HOST, config.NODEMCU_FALLBACK_IP, "192.168.4.1"]
+    seen = set()
+
+    for target in primary_targets:
+        if not target or target in seen:
             continue
-        print(f"[Network]: Probing http://{target}/status ...")
+        seen.add(target)
+        print(f"[Network]: Checking Master ESP at http://{target} ...")
         found = _probe_host(target, timeout=config.REQUEST_TIMEOUT)
         if found:
-            print(f"[Network]: NodeMCU connected at {found}")
+            print(f"[Network]: Master ESP connected at {found}")
             return found
 
-    # Step 2: Concurrent /24 Wi-Fi subnet scan
+    # Subnet scan
     local_ip = _get_local_wifi_ip()
     if local_ip:
         print(f"[Network]: Local Wi-Fi IP detected: {local_ip}")
-        discovered = _scan_subnet(local_ip)
-        if discovered:
-            print(f"[Network]: Auto-discovered NodeMCU at {discovered}")
-            return discovered
-    else:
-        print("[Network]: Could not detect local Wi-Fi IPv4 address.")
+        if not local_ip.startswith("192.168.4."):
+            discovered = _scan_subnet(local_ip)
+            if discovered:
+                print(f"[Network]: Discovered Master ESP at {discovered}")
+                return discovered
 
-    # Step 3: Manual I2C LCD IP entry (or Enter for Simulation Mode)
-    print("\n[Network]: NodeMCU was not found automatically on this Wi-Fi network.")
-    print("Type the IP shown on the NodeMCU's 16x2 I2C LCD, or press Enter for Simulation Mode.")
+    # Manual or Simulation
+    print("\n[Network]: Master ESP not detected at 192.168.4.1.")
+    print("If connected to the Lab Wi-Fi, ensure your laptop is joined to the network.")
+    print("Press Enter to run in Simulation Mode, or type the IP address:")
 
-    while True:
-        try:
-            typed = input("[NodeMCU IP | Enter = Simulation Mode]: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\n[Network]: Starting in offline Simulation Mode.")
-            return SIMULATION_BASE_URL
+    try:
+        typed = input("[Master ESP IP | Enter = Simulation Mode]: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\n[Network]: Running in offline Simulation Mode.")
+        return SIMULATION_BASE_URL
 
-        if not typed:
-            print("[Network]: Running in offline Simulation Mode (virtual relays active).")
-            return SIMULATION_BASE_URL
+    if not typed:
+        print("[Network]: Running in offline Simulation Mode (virtual lab active).")
+        return SIMULATION_BASE_URL
 
-        verified = _probe_host(typed, timeout=config.REQUEST_TIMEOUT)
-        if verified:
-            print(f"[Network]: Verified NodeMCU at {verified}")
-            return verified
+    verified = _probe_host(typed, timeout=config.REQUEST_TIMEOUT)
+    if verified:
+        print(f"[Network]: Verified Master ESP at {verified}")
+        return verified
 
-        candidate = _normalize_url(typed)
-        print(f"[Warning]: {candidate} did not respond with id '{config.EXPECTED_DEVICE_ID}'.")
-        try:
-            choice = input("Use this IP anyway? (y/N): ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            return SIMULATION_BASE_URL
-        if choice in {"y", "yes"}:
-            return candidate
+    candidate = _normalize_url(typed)
+    print(f"[Warning]: {candidate} did not confirm 'Lab Automation'.")
+    try:
+        choice = input("Use this IP anyway? (y/N): ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return SIMULATION_BASE_URL
 
-
-def _simulate_command(device: str, state: str) -> Tuple[bool, str]:
-    """Update virtual relay states when running in Simulation Mode."""
-    targets = config.get_all_device_keys() if device == "all" else [device]
-    for key in targets:
-        if state == "toggle":
-            _SIM_STATE[key] = "OFF" if _SIM_STATE.get(key) == "ON" else "ON"
-        else:
-            _SIM_STATE[key] = state.upper()
-
-    if device == "all":
-        return True, f"[SIM] All relays set to {state.upper()}."
-    return True, f"[SIM] {config.get_device_name(device)} is now {_SIM_STATE[device]}."
+    return candidate if choice in {"y", "yes"} else SIMULATION_BASE_URL
 
 
-def send_command(base_url: str, device: str, state: str) -> Tuple[bool, str]:
+# ---------------------------------------------------------------------------
+# Lab Control Commands (Matching `index.html`)
+# ---------------------------------------------------------------------------
+
+def send_master(base_url: str, control_type: str, state: int) -> Tuple[bool, str]:
     """
-    Send a relay control command:
-        GET {base_url}/control?device={device}&state={state}&api=1
+    Master control command:
+      GET /master?type={lights|fans|all}&s={1|0}
     """
-    device_clean = device.strip().lower()
-    state_clean = state.strip().lower()
+    control_clean = control_type.strip().lower()
+    if control_clean not in {"lights", "fans", "all"}:
+        return False, f"Unknown master control type '{control_type}'."
 
-    valid_devices = set(config.get_all_device_keys()) | {"all"}
-    if device_clean not in valid_devices:
-        return False, f"Unknown relay endpoint '{device_clean}'."
-    if state_clean not in VALID_STATES:
-        return False, f"Unsupported state '{state_clean}'."
+    state_val = 1 if state else 0
+    state_str = "ON" if state_val == 1 else "OFF"
 
     if base_url == SIMULATION_BASE_URL:
-        return _simulate_command(device_clean, state_clean)
+        if control_clean in {"lights", "all"}:
+            for r in range(4, 9):
+                _SIM_STATE["zone_2"][r] = state_str
+        if control_clean in {"fans", "all"}:
+            for r in range(1, 4):
+                _SIM_STATE["zone_2"][r] = state_str
+        if control_clean == "all":
+            for r in range(1, 13):
+                _SIM_STATE["zone_1"][r] = state_str
+            for r in range(1, 9):
+                _SIM_STATE["zone_3"][r] = state_str
+        return True, f"Master command executed: all {control_clean} are now {state_str}."
 
-    url = f"{_normalize_url(base_url)}/control?device={device_clean}&state={state_clean}&api=1"
+    url = f"{_normalize_url(base_url)}/master?type={control_clean}&s={state_val}"
     try:
         resp = _HTTP_SESSION.get(url, timeout=config.REQUEST_TIMEOUT)
         resp.raise_for_status()
-    except requests.exceptions.Timeout:
-        return False, f"Timed out contacting NodeMCU at {base_url}."
-    except requests.exceptions.ConnectionError:
-        return False, f"Lost connection to NodeMCU at {base_url}."
-    except requests.exceptions.HTTPError as exc:
-        code = exc.response.status_code if exc.response is not None else "unknown"
-        return False, f"NodeMCU returned HTTP error {code}."
-    except requests.exceptions.RequestException as exc:
-        return False, f"HTTP error: {exc}"
+        return True, f"Master: all {control_clean} set to {state_str}."
+    except requests.RequestException as exc:
+        return False, f"Master control failed: {exc}"
 
+
+def send_zone(base_url: str, zone: int, state: int) -> Tuple[bool, str]:
+    """
+    Zone control command:
+      GET /zone?z={1|2|3}&s={1|0}
+    """
+    if zone not in {1, 2, 3}:
+        return False, f"Invalid zone {zone} (must be 1, 2, or 3)."
+
+    state_val = 1 if state else 0
+    state_str = "ON" if state_val == 1 else "OFF"
+    zone_label = f"Zone {chr(64 + zone)}"
+
+    if base_url == SIMULATION_BASE_URL:
+        key = f"zone_{zone}"
+        for r in _SIM_STATE[key]:
+            _SIM_STATE[key][r] = state_str
+        return True, f"{zone_label} is now completely {state_str}."
+
+    url = f"{_normalize_url(base_url)}/zone?z={zone}&s={state_val}"
     try:
-        payload = resp.json()
-        if isinstance(payload, dict):
-            if str(payload.get("status", "")).lower() == "error":
-                return False, str(payload.get("message") or "NodeMCU rejected command.")
-            msg = str(payload.get("message", "")).strip()
-            if msg:
-                return True, msg
-    except ValueError:
-        plain = resp.text.strip()
-        if plain:
-            return True, plain
+        resp = _HTTP_SESSION.get(url, timeout=config.REQUEST_TIMEOUT)
+        resp.raise_for_status()
+        return True, f"{zone_label} set to {state_str}."
+    except requests.RequestException as exc:
+        return False, f"{zone_label} control failed: {exc}"
 
-    return True, f"{config.get_device_name(device_clean)} set to {state_clean.upper()}."
 
+def send_relay(base_url: str, zone: int, relay: int) -> Tuple[bool, str]:
+    """
+    Individual relay toggle command:
+      GET /relay?z={1|2|3}&r={1..12}
+    """
+    if zone not in {1, 2, 3}:
+        return False, f"Invalid zone {zone}."
+
+    max_relays = {1: 12, 2: 8, 3: 8}
+    if relay < 1 or relay > max_relays.get(zone, 8):
+        return False, f"Relay {relay} out of range for Zone {zone}."
+
+    # Name lookup
+    dev_name = config.LAB_ZONES.get(zone, {}).get("relays", {}).get(relay, f"Relay {relay}")
+
+    if base_url == SIMULATION_BASE_URL:
+        key = f"zone_{zone}"
+        curr = _SIM_STATE[key].get(relay, "OFF")
+        new_state = "OFF" if curr == "ON" else "ON"
+        _SIM_STATE[key][relay] = new_state
+        return True, f"{dev_name} (Zone {chr(64 + zone)}) is now {new_state}."
+
+    url = f"{_normalize_url(base_url)}/relay?z={zone}&r={relay}"
+    try:
+        resp = _HTTP_SESSION.get(url, timeout=config.REQUEST_TIMEOUT)
+        resp.raise_for_status()
+        return True, f"Toggled {dev_name} (Zone {chr(64 + zone)})."
+    except requests.RequestException as exc:
+        return False, f"Failed to switch {dev_name}: {exc}"
+
+
+def send_curtain(base_url: str, curtain: int, action: int) -> Tuple[bool, str]:
+    """
+    Curtain control command:
+      Individual: GET /curtain?c={1..4}&a={1|2|0}  (1=Up, 2=Down, 0=Stop)
+      All:        GET /allcurtains?a={1|2|0}
+    """
+    action_labels = {1: "UP", 2: "DOWN", 0: "STOPPED"}
+    action_str = action_labels.get(action, "STOPPED")
+
+    if curtain == 0 or curtain == -1:  # 0 indicates all curtains
+        if base_url == SIMULATION_BASE_URL:
+            for c in _SIM_STATE["curtains"]:
+                _SIM_STATE["curtains"][c] = action_str
+            return True, f"All curtains set to {action_str}."
+
+        url = f"{_normalize_url(base_url)}/allcurtains?a={action}"
+        try:
+            resp = _HTTP_SESSION.get(url, timeout=config.REQUEST_TIMEOUT)
+            resp.raise_for_status()
+            return True, f"All curtains {action_str}."
+        except requests.RequestException as exc:
+            return False, f"All curtains command failed: {exc}"
+
+    if curtain not in {1, 2, 3, 4}:
+        return False, f"Curtain {curtain} invalid (must be 1-4)."
+
+    curtain_name = config.LAB_CURTAINS.get(curtain, f"Curtain {curtain}")
+
+    if base_url == SIMULATION_BASE_URL:
+        _SIM_STATE["curtains"][curtain] = action_str
+        return True, f"{curtain_name} set to {action_str}."
+
+    url = f"{_normalize_url(base_url)}/curtain?c={curtain}&a={action}"
+    try:
+        resp = _HTTP_SESSION.get(url, timeout=config.REQUEST_TIMEOUT)
+        resp.raise_for_status()
+        return True, f"{curtain_name} {action_str}."
+    except requests.RequestException as exc:
+        return False, f"Curtain {curtain} failed: {exc}"
+
+
+# ---------------------------------------------------------------------------
+# Status Reading (HTML Parsing & Simulation)
+# ---------------------------------------------------------------------------
 
 def get_status(base_url: str) -> Tuple[bool, Dict[str, Any]]:
     """
-    Fetch live states of all 4 relays from `GET {base_url}/status`.
-
-    Returns `(True, status_dict)` on success or `(False, fallback_dict)` on failure.
+    Fetch the live status of all 28 relays and 4 curtains from the Master ESP.
+    Parses the rendered HTML from `GET http://<base_url>/`.
     """
     if base_url == SIMULATION_BASE_URL:
         return True, dict(_SIM_STATE)
 
-    url = f"{_normalize_url(base_url)}/status"
+    url = _normalize_url(base_url)
     try:
         resp = _HTTP_SESSION.get(url, timeout=config.REQUEST_TIMEOUT)
         resp.raise_for_status()
-        data = resp.json()
-        if isinstance(data, dict):
-            return True, data
-    except (requests.RequestException, ValueError) as exc:
-        return False, {
-            "error": str(exc),
-            "light": "UNKNOWN",
-            "fan": "UNKNOWN",
-            "relay3": "UNKNOWN",
-            "relay4": "UNKNOWN",
-        }
+        html = resp.text
+    except requests.RequestException as exc:
+        return False, {"error": str(exc)}
 
-    return False, {
-        "error": "Invalid JSON payload from NodeMCU.",
-        "light": "UNKNOWN",
-        "fan": "UNKNOWN",
-        "relay3": "UNKNOWN",
-        "relay4": "UNKNOWN",
+    # Parse relays from HTML buttons
+    matches = _RELAY_HTML_PATTERN.findall(html)
+    if not matches:
+        return False, {"error": "Could not parse relay elements from page HTML."}
+
+    parsed_status: Dict[str, Any] = {
+        "zone_1": {},
+        "zone_2": {},
+        "zone_3": {},
+        "curtains": {1: "READY", 2: "READY", 3: "READY", 4: "READY"},
     }
+
+    for z_str, r_str, _, state_str in matches:
+        try:
+            z = int(z_str)
+            r = int(r_str)
+            zone_key = f"zone_{z}"
+            if zone_key in parsed_status:
+                parsed_status[zone_key][r] = state_str.strip().upper()
+        except ValueError:
+            continue
+
+    return True, parsed_status
