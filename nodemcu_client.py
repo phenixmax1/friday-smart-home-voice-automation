@@ -33,13 +33,17 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 import requests
+from requests.adapters import HTTPAdapter
 
 import config
 
 SIMULATION_BASE_URL = "SIMULATION"
 
-# Persistent HTTP session with connection pooling
+# Persistent HTTP session with connection pooling and fast socket reuse
 _HTTP_SESSION = requests.Session()
+_adapter = HTTPAdapter(pool_connections=10, pool_maxsize=10, max_retries=1)
+_HTTP_SESSION.mount("http://", _adapter)
+_HTTP_SESSION.mount("https://", _adapter)
 
 # In-memory virtual lab state used during Simulation Mode
 _SIM_STATE: Dict[str, Any] = {

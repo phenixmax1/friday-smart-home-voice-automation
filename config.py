@@ -33,7 +33,7 @@ GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "YOUR_GEMINI_API_KEY_HERE").st
 LLM_MODEL: str = "gemini-3.8-flash"
 LLM_FALLBACK_MODELS: List[str] = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
 LLM_THINKING_LEVEL: str = "low"  # Fast latency level
-LLM_TIMEOUT_MS: int = 8000       # 8s timeout before auto-failover
+LLM_TIMEOUT_MS: int = 4000       # Fast 4s timeout before auto-failover
 
 TTS_MODEL: str = "gemini-3.8-flash-lite-tts"
 TTS_FALLBACK_MODELS: List[str] = [
@@ -52,9 +52,9 @@ GEMINI_VOICE_STYLE: str = (
 EDGE_FRIDAY_VOICE: str = "en-IE-EmilyNeural"
 EDGE_VOICE_RATE: str = "+8%"
 
-# False -> Tries Gemini Cloud TTS first, falling back to Edge Neural Irish voice.
-# True  -> Uses Edge Neural Irish voice directly for instant sub-300ms speech.
-PREFER_FAST_EDGE_VOICE: bool = False
+# Default to True for instant sub-300ms speech with authentic MCU Irish female voice.
+# Zero 404 errors, zero rate limits, and instant audio playback.
+PREFER_FAST_EDGE_VOICE: bool = True
 
 # ---------------------------------------------------------------------------
 # Master ESP (ESP8266) Lab Automation Network Settings
@@ -65,7 +65,7 @@ NODEMCU_FALLBACK_IP: str = "192.168.4.1"
 NODEMCU_PORT: int = 80
 EXPECTED_TITLE: str = "Lab Automation"
 
-REQUEST_TIMEOUT: float = 3.0       # Timeout for HTTP requests to ESP
+REQUEST_TIMEOUT: float = 1.8       # Fast 1.8s timeout for HTTP requests to ESP
 DISCOVERY_TIMEOUT: float = 0.5     # Subnet scan per-host timeout
 DISCOVERY_MAX_WORKERS: int = 60    # Subnet discovery threads
 
@@ -74,8 +74,8 @@ DISCOVERY_MAX_WORKERS: int = 60    # Subnet discovery threads
 # ---------------------------------------------------------------------------
 STT_LANGUAGE: str = "en-IN"
 AMBIENT_NOISE_DURATION: float = 0.6  # Calibrated once at startup
-STT_PAUSE_THRESHOLD: float = 0.65    # Fast response after speech ends
-STT_NON_SPEAKING_DURATION: float = 0.4
+STT_PAUSE_THRESHOLD: float = 0.45    # Snappy end-of-speech detection (0.45s)
+STT_NON_SPEAKING_DURATION: float = 0.3 # 0.3s non-speaking window
 LISTEN_TIMEOUT: int = 6
 PHRASE_TIME_LIMIT: int = 10
 

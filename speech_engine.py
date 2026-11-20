@@ -332,6 +332,70 @@ def _speak_with_edge_tts(text: str) -> bool:
     return False
 
 
+def warmup_tts_cache() -> None:
+    """
+    Pre-synthesizes standard F.R.I.D.A.Y. responses in a background thread so they
+    are immediately available in local temp cache with ~0ms generation latency.
+    """
+    common_phrases = [
+        config.CLAP_WAKE_RESPONSE,
+        config.STANDBY_GOODBYE_RESPONSE,
+        "All lab lights are on.",
+        "All lab lights are off.",
+        "All lab fans are on.",
+        "All lab fans are off.",
+        "Powering up all lab systems.",
+        "All lab systems powered down.",
+        "Raising all curtains.",
+        "Lowering all curtains.",
+        "Curtains stopped.",
+        "Zone A is online.",
+        "Zone A is offline.",
+        "Zone B is online.",
+        "Zone B is offline.",
+        "Zone C is online.",
+        "Zone C is offline.",
+        "Right away.",
+        "Systems online and ready. What do you need?",
+        "All lab subsystems are reporting nominal status.",
+    ]
+
+    def _worker() -> None:
+        if edge_tts is None:
+            return
+        for phrase in common_phrases:
+            spoken_text = _sanitize_for_tts(phrase)
+            cache_key = f"edge|{config.EDGE_FRIDAY_VOICE}|{config.EDGE_VOICE_RATE}|{spoken_text}"
+            cached = _cache_file(cache_key, "mp3")
+            if os.path.exists(cached) and os.path.getsize(cached) > 0:
+                continue
+
+            async def _stream_one(text_val: str) -> bytes:
+                comm = edge_tts.Communicate(
+                    text=text_val,
+                    voice=config.EDGE_FRIDAY_VOICE,
+                    rate=config.EDGE_VOICE_RATE,
+                )
+                buf = bytearray()
+                async for chunk in comm.stream():
+                    if chunk.get("type") == "audio":
+                        buf.extend(chunk["data"])
+                return bytes(buf)
+
+            try:
+                fut = asyncio.run_coroutine_threadsafe(
+                    _stream_one(spoken_text), _get_async_loop()
+                )
+                mp3_data = fut.result(timeout=6.0)
+                if mp3_data:
+                    with open(cached, "wb") as f:
+                        f.write(mp3_data)
+            except Exception:
+                continue
+
+    threading.Thread(target=_worker, name="friday-tts-warmup", daemon=True).start()
+
+
 def speak(text: str) -> None:
     """
     Print and speak F.R.I.D.A.Y.'s response using Cloud Neural TTS ONLY

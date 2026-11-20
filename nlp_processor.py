@@ -230,12 +230,47 @@ def _local_backup_brain(user_text: str, current_status: Dict[str, Any]) -> Frida
             continue
 
     if commands:
-        if len(commands) == 1 and commands[0].action == "status":
-            return FridayLabBrainOutput(
-                commands=commands,
-                reply="All lab subsystems are reporting nominal status.",
-            )
-        return FridayLabBrainOutput(commands=commands, reply="Right away. Executing now.")
+        if len(commands) == 1:
+            cmd = commands[0]
+            if cmd.action == "status":
+                reply = "All lab subsystems are reporting nominal status."
+            elif cmd.target_type == "master":
+                if cmd.target == "lights":
+                    reply = "All lab lights are on." if cmd.action == "on" else "All lab lights are off."
+                elif cmd.target == "fans":
+                    reply = "All lab fans are on." if cmd.action == "on" else "All lab fans are off."
+                elif cmd.target == "all":
+                    reply = "Powering up all lab systems." if cmd.action == "on" else "All lab systems powered down."
+                else:
+                    reply = f"Master {cmd.target} set to {cmd.action}."
+            elif cmd.target_type == "curtain":
+                if cmd.curtain == 0 or "all" in cmd.target:
+                    if cmd.action == "up":
+                        reply = "Raising all curtains."
+                    elif cmd.action == "down":
+                        reply = "Lowering all curtains."
+                    else:
+                        reply = "Curtains stopped."
+                else:
+                    act_desc = "going up" if cmd.action == "up" else "coming down" if cmd.action == "down" else "stopped"
+                    reply = f"Curtain {cmd.curtain} is {act_desc}."
+            elif cmd.target_type == "zone":
+                z_letter = chr(64 + (cmd.zone or 1))
+                reply = f"Zone {z_letter} is {'online' if cmd.action == 'on' else 'offline'}."
+            elif cmd.target_type == "relay":
+                if "fan" in cmd.target:
+                    f_num = cmd.relay or 1
+                    reply = f"Fan {f_num} is {'on' if cmd.action == 'on' else 'off'}."
+                elif "light" in cmd.target:
+                    l_num = (cmd.relay or 4) - 3
+                    reply = f"Light {l_num} is {'on' if cmd.action == 'on' else 'off'}."
+                else:
+                    reply = f"Relay {cmd.relay or 1} is {'on' if cmd.action == 'on' else 'off'}."
+            else:
+                reply = "Right away."
+        else:
+            reply = "Right away. Executing requested lab commands."
+        return FridayLabBrainOutput(commands=commands, reply=reply)
 
     # MCU F.R.I.D.A.Y. Small Talk
     if re.search(r"\b(?:hello|hi|hey|good\s+morning|good\s+afternoon|good\s+evening)\b", text):
@@ -261,15 +296,23 @@ def _local_backup_brain(user_text: str, current_status: Dict[str, Any]) -> Frida
 
 def understand_command(user_text: str, current_status: Dict[str, Any]) -> FridayLabBrainOutput:
     """
-    Process natural language commands using Gemini 3.8 Flash structured output,
-    failing over gracefully across models down to the local backup brain.
+    Process natural language commands with sub-millisecond instant hardware
+    matching for standard controls, and Gemini 3.8 Flash for open-ended queries.
     """
     cleaned = user_text.strip()
     if not cleaned:
         return FridayLabBrainOutput(commands=[], reply="I'm listening.")
 
+    # 1. FAST ZERO-LATENCY MATCHER: Sub-millisecond hardware resolution
+    fast_result = _local_backup_brain(cleaned, current_status)
+    if fast_result.commands or (
+        fast_result.reply != "Ready for your command. You can control lights, fans, zones, or curtains."
+    ):
+        return fast_result
+
+    # 2. GENERATIVE CLOUD BRAIN: Used only for non-hardware open-ended queries
     if not config.has_valid_gemini_key():
-        return _local_backup_brain(cleaned, current_status)
+        return fast_result
 
     client = _get_client()
     system_prompt = _build_system_instruction(current_status)
@@ -312,4 +355,4 @@ def understand_command(user_text: str, current_status: Dict[str, Any]) -> Friday
             continue
 
     print("[Brain Failover]: Using local backup NLP brain.")
-    return _local_backup_brain(cleaned, current_status)
+    return fast_result

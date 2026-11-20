@@ -139,12 +139,58 @@ def execute_lab_actions(
     return feedback
 
 
+def _optimistically_update_status(
+    status_data: Dict[str, Any],
+    commands: list[nlp_processor.LabAction],
+) -> Dict[str, Any]:
+    """Instantly update in-memory lab state without blocking on micro-controller HTTP scrapes."""
+    for cmd in commands:
+        if cmd.target_type == "master":
+            state_str = "ON" if cmd.action in {"on", "up"} else "OFF"
+            if cmd.target in {"lights", "all"}:
+                for r in range(4, 9):
+                    status_data.setdefault("zone_2", {})[r] = state_str
+            if cmd.target in {"fans", "all"}:
+                for r in range(1, 4):
+                    status_data.setdefault("zone_2", {})[r] = state_str
+            if cmd.target == "all":
+                for r in range(1, 13):
+                    status_data.setdefault("zone_1", {})[r] = state_str
+                for r in range(1, 9):
+                    status_data.setdefault("zone_3", {})[r] = state_str
+        elif cmd.target_type == "zone":
+            z_key = f"zone_{cmd.zone or 1}"
+            state_str = "ON" if cmd.action in {"on", "up"} else "OFF"
+            for r in status_data.get(z_key, {}):
+                status_data[z_key][r] = state_str
+        elif cmd.target_type == "relay":
+            z_key = f"zone_{cmd.zone or 1}"
+            r_idx = cmd.relay or 1
+            curr = status_data.get(z_key, {}).get(r_idx, "OFF")
+            new_st = "OFF" if curr == "ON" else "ON" if cmd.action == "toggle" else cmd.action.upper()
+            status_data.setdefault(z_key, {})[r_idx] = new_st
+        elif cmd.target_type == "curtain":
+            c_idx = cmd.curtain if cmd.curtain is not None else 0
+            act_str = "UP" if cmd.action == "up" else "DOWN" if cmd.action == "down" else "STOPPED"
+            if c_idx == 0:
+                for c in range(1, 5):
+                    status_data.setdefault("curtains", {})[c] = act_str
+            else:
+                status_data.setdefault("curtains", {})[c_idx] = act_str
+    return status_data
+
+
 def process_user_input(
     user_text: str,
     base_url: str,
     current_status: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """Process user utterance through F.R.I.D.A.Y.'s brain, execute actions, and reply."""
+    """
+    Process user utterance through F.R.I.D.A.Y.'s brain:
+    1. Instant hardware command execution (< 30ms).
+    2. Optimistic in-memory status update (zero lag).
+    3. Simultaneous authentic MCU voice response.
+    """
     cleaned = user_text.strip()
     if not cleaned:
         return current_status
@@ -153,11 +199,19 @@ def process_user_input(
     hardware_errors = []
 
     if brain_output.commands:
+        # Check if user specifically requested a status query
+        is_status_query = any(c.target_type == "status" for c in brain_output.commands)
+
         hardware_errors = execute_lab_actions(base_url, brain_output.commands)
-        # Refresh status from ESP
-        ok, refreshed = nodemcu_client.get_status(base_url)
-        if ok:
-            current_status = refreshed
+
+        if is_status_query:
+            # Re-fetch live states from micro-controller
+            ok, refreshed = nodemcu_client.get_status(base_url)
+            if ok:
+                current_status = refreshed
+        else:
+            # Instant zero-lag optimistic in-memory update
+            current_status = _optimistically_update_status(current_status, brain_output.commands)
 
     if hardware_errors:
         speech_engine.speak(
@@ -207,7 +261,10 @@ def main() -> None:
     # 3. Calibrate microphone ONCE at startup
     speech_engine.init_microphone()
 
-    # 4. Silent STANDBY waiting for double clap
+    # 4. Pre-warm Irish female voice cache in background for ~0ms speech latency
+    speech_engine.warmup_tts_cache()
+
+    # 5. Silent STANDBY waiting for double clap
     try:
         while True:
             woke = clap_detector.wait_for_clap()
